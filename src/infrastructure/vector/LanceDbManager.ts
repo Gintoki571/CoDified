@@ -1,6 +1,7 @@
 import * as lancedb from '@lancedb/lancedb';
 import * as path from 'path';
 import * as fs from 'fs';
+import { validateNodeName, escapeSqlString } from '../../core/validation';
 
 // -------------------------------------------------------------------------
 // Types
@@ -128,6 +129,11 @@ export class LanceDbManager {
     public async addVectors(records: VectorRecord[]): Promise<void> {
         if (records.length === 0) return;
 
+        // Security: Validate node name if present in metadata/records
+        for (const record of records) {
+            if (record.nodeName) validateNodeName(record.nodeName as string);
+        }
+
         const db = await this.getDb();
         const existingTableNames = await db.tableNames();
 
@@ -148,8 +154,8 @@ export class LanceDbManager {
         const table = await this.getTable();
         if (!table) return;
 
-        // Escape IDs properly to prevent injection
-        const idList = ids.map(id => `'${id.replace(/'/g, "''")}'`).join(', ');
+        // Escape IDs properly to prevent injection (defense in depth)
+        const idList = ids.map(id => `'${escapeSqlString(id)}'`).join(', ');
         await table.delete(`id IN (${idList})`);
     }
 
@@ -178,8 +184,9 @@ export class LanceDbManager {
 
         const { limit = 10, minTimestamp, maxTimestamp } = options;
 
-        // Build filter conditions
-        const conditions: string[] = [`userId = '${userId.replace(/'/g, "''")}'`];
+        // Build filter conditions with escaping
+        const safeUserId = escapeSqlString(userId);
+        const conditions: string[] = [`userId = '${safeUserId}'`];
 
         if (minTimestamp !== undefined) {
             conditions.push(`timestamp >= ${minTimestamp}`);

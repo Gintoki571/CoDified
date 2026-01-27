@@ -1,6 +1,7 @@
-import { db } from '../../infrastructure/database';
+import { getDatabase } from '../../infrastructure/database';
 import { nodes, edges } from '../../infrastructure/database/schema';
 import { sql, inArray } from 'drizzle-orm';
+import { validateNodeName, escapeSqlString } from '../validation';
 
 // -------------------------------------------------------------------------
 // Types
@@ -60,8 +61,9 @@ export class GraphQueryEngine {
      * @param maxDepth - How many hops to traverse (Default: 2)
      */
     async findSubgraph(startNodeName: string, userId: string, maxDepth: number = 2): Promise<SubgraphResult> {
-        // Input Validation
-        if (!startNodeName?.trim() || !userId?.trim()) {
+        // Input Validation & Security
+        validateNodeName(startNodeName);
+        if (!userId?.trim()) {
             return { nodes: [], edges: [] };
         }
 
@@ -93,7 +95,7 @@ export class GraphQueryEngine {
             SELECT DISTINCT id, name, type, content, depth FROM traversal_path;
         `;
 
-        const rawNodes = await db.all(nodeQuery);
+        const rawNodes = await getDatabase().all(nodeQuery);
         const graphNodes = hydrateNodes(rawNodes);
 
         if (graphNodes.length === 0) {
@@ -118,7 +120,7 @@ export class GraphQueryEngine {
                 AND e.target_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
         `;
 
-        const rawEdges = await db.all(edgeQuery);
+        const rawEdges = await getDatabase().all(edgeQuery);
 
         return {
             nodes: graphNodes,
@@ -138,8 +140,10 @@ export class GraphQueryEngine {
         userId: string,
         maxDepth: number = 5
     ): Promise<{ path: string; depth: number } | null> {
-        // Input Validation
-        if (!startNode?.trim() || !endNode?.trim() || !userId?.trim()) {
+        // Input Validation & Security
+        validateNodeName(startNode);
+        validateNodeName(endNode);
+        if (!userId?.trim()) {
             return null;
         }
 
@@ -186,7 +190,7 @@ export class GraphQueryEngine {
             LIMIT 1;
         `;
 
-        const result = await db.get(query) as { path: string; depth: number } | undefined;
+        const result = await getDatabase().get(query) as { path: string; depth: number } | undefined;
         return result || null;
     }
 
@@ -210,7 +214,7 @@ export class GraphQueryEngine {
               AND n.name != ${nodeName}
         `;
 
-        const rawNodes = await db.all(query);
+        const rawNodes = await getDatabase().all(query);
         return hydrateNodes(rawNodes);
     }
 }

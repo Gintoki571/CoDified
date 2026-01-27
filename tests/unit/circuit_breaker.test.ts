@@ -21,8 +21,9 @@ async function test_cb() {
         try {
             await cb.execute(async () => { return "ok"; });
             console.log("❌ Error: Request allowed while OPEN");
-        } catch (e) {
-            console.log("✅ Blocked while OPEN: " + e.message);
+        } catch (e: unknown) {
+            const message = e instanceof Error ? e.message : String(e);
+            console.log("✅ Blocked while OPEN: " + message);
         }
 
         // Wait for timeout

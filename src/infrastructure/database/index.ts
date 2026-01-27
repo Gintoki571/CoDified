@@ -1,10 +1,11 @@
 import Database from 'better-sqlite3';
 import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
-import * as schema from './schema.js';
+import * as schema from './schema';
 import path from 'path';
-import { CONFIG } from '../../config/config.js';
-import { ENV } from '../../config/env.js';
-import { Logger } from '../../core/logging/Logger.js';
+import fs from 'fs';
+import { CONFIG } from '../../config/config';
+import { ENV } from '../../config/env';
+import { Logger } from '../../core/logging/Logger';
 
 // Database file path - stored in root data directory
 const DB_FILENAME = ENV.NODE_ENV === 'test' ? 'codified_test.db' : 'codified.db';
@@ -24,7 +25,6 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
     }
 
     // Ensure directory exists
-    const fs = require('fs');
     if (!fs.existsSync(CONFIG.PATHS.DATA_DIR)) {
         fs.mkdirSync(CONFIG.PATHS.DATA_DIR, { recursive: true });
     }
@@ -128,4 +128,4 @@ export function closeDatabase(): void {
 }
 
 export { schema };
-export { nodes, edges, embeddings, messages } from './schema.js';
+export { nodes, edges, embeddings, messages } from './schema';

@@ -1,7 +1,7 @@
 // src/config/config.ts
 
 import path from 'path';
-import { ENV } from './env.js';
+import { ENV } from './env';
 
 /**
  * Helper to get the project root directory

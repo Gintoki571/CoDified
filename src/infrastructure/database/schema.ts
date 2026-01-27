@@ -79,3 +79,19 @@ export const embeddings = sqliteTable('embeddings', {
     createdAt: integer('created_at', { mode: 'timestamp' })
         .default(sql`(unixepoch())`),
 });
+// -------------------------------------------------------------------------
+// 5. Messages Table (Chat History)
+// -------------------------------------------------------------------------
+export const messages = sqliteTable('messages', {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    role: text('role').notNull(), // 'user', 'assistant', 'system'
+    content: text('content').notNull(),
+    tokenCount: integer('token_count'),
+    isSummarized: integer('is_summarized').default(0),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+        .notNull()
+        .default(sql`(unixepoch())`),
+}, (t) => ({
+    summarizedIndex: index('idx_messages_summarized').on(t.isSummarized),
+    createdIndex: index('idx_messages_created').on(t.createdAt),
+}));

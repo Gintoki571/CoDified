@@ -9,7 +9,7 @@
  * 3. Configurable verbosity
  */
 
-import { ENV } from '../../config/env.js';
+import { ENV } from '../../config/env';
 
 export enum LogLevel {
     DEBUG = 0,

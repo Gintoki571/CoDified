@@ -22,16 +22,17 @@ server.tool(
         metadata: z.string().optional().describe("JSON string of extra metadata"),
         userId: z.string().default("default_user").describe("The user ID to associate memory with")
     },
-    async ({ text, metadata, userId }) => {
+    async (args: { text: string; metadata?: string; userId: string }) => {
         try {
-            const meta = metadata ? JSON.parse(metadata) : {};
-            const name = await memoryManager.addMemory(text, userId, meta);
+            const meta = args.metadata ? JSON.parse(args.metadata) : {};
+            const name = await memoryManager.addMemory(args.text, args.userId, meta);
             return {
-                content: [{ type: "text", text: `Memory stored successfully: ${name}` }]
+                content: [{ type: "text" as const, text: `Memory stored successfully: ${name}` }]
             };
-        } catch (err: any) {
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
             return {
-                content: [{ type: "text", text: `Error storing memory: ${err.message}` }],
+                content: [{ type: "text" as const, text: `Error storing memory: ${message}` }],
                 isError: true
             };
         }
@@ -47,24 +48,26 @@ server.tool(
         query: z.string().describe("The semantic query to search for"),
         userId: z.string().default("default_user")
     },
-    async ({ query, userId }) => {
+    async (args: { query: string; userId: string }) => {
         try {
-            const results = await memoryManager.search(query, userId);
+            const results = await memoryManager.search(args.query, args.userId);
 
             // Format results for LLM consumption
             const readable = results.map(r => {
-                const graphCtx = r.context ?
-                    `[Graph: ${r.context.nodes.length} nodes, ${r.context.edges.length} edges]` :
-                    '[No Graph Context]';
-                return \`Memory: "\${r.memory.content || r.memory.text}"\n  Similarity: \${r.similarity}\n  Context: \${graphCtx}\`;
+                const graphCtx = r.context
+                    ? `[Graph: ${r.context.nodes.length} nodes, ${r.context.edges.length} edges]`
+                    : '[No Graph Context]';
+                const content = r.memory.content || r.memory.text || 'No content';
+                return `Memory: "${content}"\n  Similarity: ${r.similarity}\n  Context: ${graphCtx}`;
             }).join('\n---\n');
 
             return {
-                content: [{ type: "text", text: readable }]
+                content: [{ type: "text" as const, text: readable || 'No memories found.' }]
             };
-        } catch (err: any) {
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
             return {
-                content: [{ type: "text", text: `Error searching memory: ${ err.message } ` }],
+                content: [{ type: "text" as const, text: `Error searching memory: ${message}` }],
                 isError: true
             };
         }

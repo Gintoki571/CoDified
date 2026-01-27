@@ -3,14 +3,14 @@
 A high-performance, local-first memory engine for AI Agents.
 It combines **Temporal**, **Semantic**, and **Graph** retrieval capabilities without requiring Docker.
 
-## 🏗️ Architecture (Embedded Stack)
+##  Architecture (Embedded Stack)
 - **Database**: SQLite (WAL Mode) with Drizzle ORM.
 - **Vector Store**: LanceDB (Embedded).
 - **Graph Engine**: Native SQLite Recursive CTEs.
 - **Cache**: In-Memory LRU (Session).
 - **Interface**: MCP (Model Context Protocol).
 
-## 🚀 Getting Started
+##  Getting Started
 
 ### 1. Prerequisites
 - Node.js v18+
@@ -38,13 +38,13 @@ npm start
 npm run dev
 ```
 
-## 🧪 Testing
+##  Testing
 Run the System Integration Test to verify the full pipeline (Embedding -> Storage -> Retrieval):
 ```bash
 npm test
 ```
 
-## 📂 Project Structure
+##  Project Structure
 - `src/infrastructure/`: Database, Vector, and Cache implementations.
 - `src/core/`: Logic for Graph Traversal and Memory Orchestration.
 - `src/interface/mcp/`: MCP Tool definitions and Server entry point.

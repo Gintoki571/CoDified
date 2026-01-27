@@ -8,6 +8,7 @@ import { eq, and } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { ErrorFactory } from '../errors';
 import { TransactionManager } from '../transactions/TransactionManager';
+import { CircuitBreaker } from '../security/CircuitBreaker';
 
 export class MemoryManager {
     private embedder: Embedder;
@@ -15,6 +16,8 @@ export class MemoryManager {
     private cache: SessionCache;
     private graphEngine: GraphQueryEngine;
     private txManager: TransactionManager;
+    private embeddingCircuit: CircuitBreaker;
+    private vectorCircuit: CircuitBreaker;
 
     constructor() {
         this.embedder = Embedder.getInstance();
@@ -22,6 +25,8 @@ export class MemoryManager {
         this.cache = SessionCache.getInstance();
         this.graphEngine = new GraphQueryEngine();
         this.txManager = TransactionManager.getInstance();
+        this.embeddingCircuit = new CircuitBreaker('Embedding-Model');
+        this.vectorCircuit = new CircuitBreaker('LanceDB-Store');
     }
 
     /**
@@ -30,21 +35,25 @@ export class MemoryManager {
      */
     async addMemory(content: string, userId: string, metadata: any = {}): Promise<string> {
         return this.txManager.executeTransaction(async () => {
-            // 1. Generate Embedding
-            const vector = await this.embedder.embed(content);
+            // 1. Generate Embedding (Protected by Circuit Breaker)
+            const vector = await this.embeddingCircuit.execute(async () =>
+                await this.embedder.embed(content)
+            );
             const vectorId = uuidv4();
             const timestamp = Date.now();
 
-            // 2. Save to Vector Store (LanceDB)
-            await this.vectorDb.addVectors([{
-                id: vectorId,
-                vector: vector,
-                text: content,
-                userId: userId,
-                timestamp: timestamp,
-                nodeName: `mem-${vectorId.substring(0, 8)}`, // For validation check
-                metadata: JSON.stringify(metadata)
-            }]);
+            // 2. Save to Vector Store (Protected by Circuit Breaker)
+            await this.vectorCircuit.execute(async () =>
+                await this.vectorDb.addVectors([{
+                    id: vectorId,
+                    vector: vector,
+                    text: content,
+                    userId: userId,
+                    timestamp: timestamp,
+                    nodeName: `mem-${vectorId.substring(0, 8)}`,
+                    metadata: JSON.stringify(metadata)
+                }])
+            );
 
             // Register compensation: delete vector if SQLite fails
             this.txManager.addRollbackAction(
@@ -86,9 +95,13 @@ export class MemoryManager {
      * Search memory using Hybrid Strategy (Vector + Graph).
      */
     async search(query: string, userId: string): Promise<any[]> {
-        // 1. Vector Search
-        const queryVec = await this.embedder.embed(query);
-        const vectorResults = await this.vectorDb.search(queryVec, userId, { limit: 5 });
+        // 1. Vector Search (Protected by Circuit Breaker)
+        const queryVec = await this.embeddingCircuit.execute(async () =>
+            await this.embedder.embed(query)
+        );
+        const vectorResults = await this.vectorCircuit.execute(async () =>
+            await this.vectorDb.search(queryVec, userId, { limit: 5 })
+        );
 
         // 2. Hydrate & Expand from Graph
         const results = [];

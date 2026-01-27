@@ -1,33 +1,131 @@
-import { drizzle } from 'drizzle-orm/better-sqlite3';
 import Database from 'better-sqlite3';
-import * as schema from './schema';
+import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
+import * as schema from './schema.js';
 import path from 'path';
-import fs from 'fs';
+import { CONFIG } from '../../config/config.js';
+import { ENV } from '../../config/env.js';
+import { Logger } from '../../core/logging/Logger.js';
 
-// Ensure data directory exists
-const dataDir = path.resolve(process.cwd(), 'data');
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
+// Database file path - stored in root data directory
+const DB_FILENAME = ENV.NODE_ENV === 'test' ? 'codified_test.db' : 'codified.db';
+const DB_PATH = path.join(CONFIG.PATHS.DATA_DIR, DB_FILENAME);
+
+let db: BetterSQLite3Database<typeof schema> | null = null;
+let sqlite: Database.Database | null = null;
+
+/**
+ * Initialize the SQLite database connection
+ */
+export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<typeof schema> {
+    if (db && dbPath === DB_PATH) return db;
+
+    if (sqlite) {
+        sqlite.close();
+    }
+
+    // Ensure directory exists
+    const fs = require('fs');
+    if (!fs.existsSync(CONFIG.PATHS.DATA_DIR)) {
+        fs.mkdirSync(CONFIG.PATHS.DATA_DIR, { recursive: true });
+    }
+
+    sqlite = new Database(dbPath);
+    sqlite.pragma('journal_mode = WAL'); // Better performance for concurrent reads
+    sqlite.pragma('foreign_keys = ON');  // Enforce foreign keys
+
+    db = drizzle(sqlite, { schema });
+
+    // Create tables if they don't exist
+    sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS nodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            node_type TEXT NOT NULL,
+            metadata TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            UNIQUE(name, user_id)
+        );
+        
+        CREATE TABLE IF NOT EXISTS edges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_node TEXT NOT NULL,
+            to_node TEXT NOT NULL,
+            edge_type TEXT NOT NULL,
+            weight REAL DEFAULT 1.0,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            FOREIGN KEY (from_node, user_id) REFERENCES nodes(name, user_id),
+            FOREIGN KEY (to_node, user_id) REFERENCES nodes(name, user_id)
+        );
+        
+        CREATE TABLE IF NOT EXISTS embeddings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_name TEXT NOT NULL,
+            embedding_id TEXT NOT NULL,
+            text_content TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            FOREIGN KEY (node_name, user_id) REFERENCES nodes(name, user_id)
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
+        CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(node_type);
+        CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_node);
+        CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(from_node, to_node, edge_type, user_id);
+        CREATE INDEX IF NOT EXISTS idx_embeddings_node ON embeddings(node_name);
+
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            token_count INTEGER,
+            is_summarized INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_messages_summarized ON messages(is_summarized);
+        CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+    `);
+
+    Logger.info('DB', `SQLite database initialized at: ${dbPath}`);
+    return db;
 }
 
-// Initialize SQLite connection with WAL mode for performance
-const sqlite = new Database(path.join(dataDir, 'remem.db'));
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('foreign_keys = ON'); // Critical for Graph Integrity
+/**
+ * Get the database instance
+ */
+export function getDatabase(): BetterSQLite3Database<typeof schema> {
+    if (!db) {
+        return initDatabase();
+    }
+    return db;
+}
 
-export const db = drizzle(sqlite, { schema });
+/**
+ * Get the raw SQLite instance (for raw queries)
+ */
+export function getSqliteInstance(): Database.Database {
+    if (!sqlite) {
+        initDatabase();
+    }
+    return sqlite!;
+}
 
-export const closeDatabase = () => {
-    console.log('Closing database connection...');
-    sqlite.close();
-};
+/**
+ * Close the database connection
+ */
+export function closeDatabase(): void {
+    if (sqlite) {
+        sqlite.close();
+        sqlite = null;
+        db = null;
+        Logger.info('DB', 'Database connection closed');
+    }
+}
 
-// Handle process termination ensuring DB closure
-process.on('SIGINT', () => {
-    closeDatabase();
-    process.exit(0);
-});
-process.on('SIGTERM', () => {
-    closeDatabase();
-    process.exit(0);
-});
+export { schema };
+export { nodes, edges, embeddings, messages } from './schema.js';

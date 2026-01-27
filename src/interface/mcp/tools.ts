@@ -2,13 +2,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { MemoryManager } from '../../core/memory/MemoryManager';
+import { RememError } from '../../core/errors';
 
 // Initialize Manager
 const memoryManager = new MemoryManager();
 
 // Create MCP Server
 const server = new McpServer({
-    name: "ReMem-Engine",
+    name: "CoDified-Engine",
     version: "1.0.0"
 });
 
@@ -30,7 +31,8 @@ server.tool(
                 content: [{ type: "text" as const, text: `Memory stored successfully: ${name}` }]
             };
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = err instanceof RememError ? err.toUserFriendly() :
+                (err instanceof Error ? err.message : String(err));
             return {
                 content: [{ type: "text" as const, text: `Error storing memory: ${message}` }],
                 isError: true
@@ -65,7 +67,8 @@ server.tool(
                 content: [{ type: "text" as const, text: readable || 'No memories found.' }]
             };
         } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
+            const message = err instanceof RememError ? err.toUserFriendly() :
+                (err instanceof Error ? err.message : String(err));
             return {
                 content: [{ type: "text" as const, text: `Error searching memory: ${message}` }],
                 isError: true
@@ -73,6 +76,7 @@ server.tool(
         }
     }
 );
+
 
 // Start Server
 async function main() {

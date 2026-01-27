@@ -1,6 +1,7 @@
 import * as lancedb from '@lancedb/lancedb';
 import * as path from 'path';
 import * as fs from 'fs';
+import { Mutex } from 'async-mutex';
 import { validateNodeName, escapeSqlString } from '../../core/validation';
 
 // -------------------------------------------------------------------------
@@ -34,6 +35,7 @@ export class LanceDbManager {
     private static instance: LanceDbManager;
     private db: lancedb.Connection | null = null;
     private tableName = 'memories';
+    private initMutex = new Mutex();
 
     // In-memory transaction tracker for Saga pattern
     private pendingTransactions: Map<string, SagaTransaction> = new Map();
@@ -48,14 +50,16 @@ export class LanceDbManager {
     }
 
     private async getDb(): Promise<lancedb.Connection> {
-        if (!this.db) {
-            const dbPath = path.join(process.cwd(), 'data', 'lancedb');
-            if (!fs.existsSync(dbPath)) {
-                fs.mkdirSync(dbPath, { recursive: true });
+        return await this.initMutex.runExclusive(async () => {
+            if (!this.db) {
+                const dbPath = path.join(process.cwd(), 'data', 'lancedb');
+                if (!fs.existsSync(dbPath)) {
+                    fs.mkdirSync(dbPath, { recursive: true });
+                }
+                this.db = await lancedb.connect(dbPath);
             }
-            this.db = await lancedb.connect(dbPath);
-        }
-        return this.db;
+            return this.db;
+        });
     }
 
     private async getTable(): Promise<lancedb.Table | null> {

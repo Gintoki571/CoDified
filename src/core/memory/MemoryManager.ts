@@ -1,4 +1,4 @@
-import { db } from '../../infrastructure/database';
+import { getDatabase } from '../../infrastructure/database';
 import { nodes, edges, memoryEvents } from '../../infrastructure/database/schema';
 import { Embedder } from '../../infrastructure/vector/Embedder';
 import { LanceDbManager } from '../../infrastructure/vector/LanceDbManager';
@@ -6,18 +6,22 @@ import { SessionCache } from '../../infrastructure/cache/SessionLru';
 import { GraphQueryEngine } from '../graph/GraphQueryEngine';
 import { eq, and } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
+import { ErrorFactory } from '../errors';
+import { TransactionManager } from '../transactions/TransactionManager';
 
 export class MemoryManager {
     private embedder: Embedder;
     private vectorDb: LanceDbManager;
     private cache: SessionCache;
     private graphEngine: GraphQueryEngine;
+    private txManager: TransactionManager;
 
     constructor() {
         this.embedder = Embedder.getInstance();
         this.vectorDb = LanceDbManager.getInstance();
         this.cache = SessionCache.getInstance();
         this.graphEngine = new GraphQueryEngine();
+        this.txManager = TransactionManager.getInstance();
     }
 
     /**
@@ -25,35 +29,38 @@ export class MemoryManager {
      * Orchestrates: Embedding -> VectorDB -> SQLite Node -> Links.
      */
     async addMemory(content: string, userId: string, metadata: any = {}): Promise<string> {
-        // 1. Generate Embedding
-        const vector = await this.embedder.embed(content);
-        const vectorId = uuidv4();
-        const timestamp = Date.now();
+        return this.txManager.executeTransaction(async () => {
+            // 1. Generate Embedding
+            const vector = await this.embedder.embed(content);
+            const vectorId = uuidv4();
+            const timestamp = Date.now();
 
-        // 2. Save to Vector Store (LanceDB)
-        // Note: In real production, we might want to do this parallel or transactionally carefully.
-        // If SQLite fails, we should delete this vector (Compensation).
-        await this.vectorDb.addVectors([{
-            id: vectorId,
-            vector: vector,
-            text: content,
-            userId: userId,
-            timestamp: timestamp,
-            metadata: JSON.stringify(metadata)
-        }]);
+            // 2. Save to Vector Store (LanceDB)
+            await this.vectorDb.addVectors([{
+                id: vectorId,
+                vector: vector,
+                text: content,
+                userId: userId,
+                timestamp: timestamp,
+                nodeName: `mem-${vectorId.substring(0, 8)}`, // For validation check
+                metadata: JSON.stringify(metadata)
+            }]);
 
-        try {
+            // Register compensation: delete vector if SQLite fails
+            this.txManager.addRollbackAction(
+                async () => { await this.vectorDb.deleteVectors([vectorId]); },
+                `Delete vector ${vectorId} from LanceDB`
+            );
+
             // 3. Save to Graph Store (SQLite)
-            // Name generation strategy: Use a summary or slice? For now, using content slice or UUID if long.
-            // Better: 'Memory-' + short hash.
             const name = `mem-${vectorId.substring(0, 8)}`;
 
-            const result = await db.insert(nodes).values({
+            const result = await getDatabase().insert(nodes).values({
                 name: name,
                 type: 'memory',
                 content: content,
                 userId: userId,
-                embeddingId: vectorId, // Link to vector
+                embeddingId: vectorId,
                 createdAt: new Date(timestamp),
                 updatedAt: new Date(timestamp)
             }).returning({ id: nodes.id });
@@ -61,23 +68,18 @@ export class MemoryManager {
             const nodeId = result[0].id;
 
             // 4. Log Event
-            await db.insert(memoryEvents).values({
+            await getDatabase().insert(memoryEvents).values({
                 type: 'MEMORY_ADDED',
                 description: 'User added new memory block',
                 userId: userId,
                 metadata: JSON.stringify({ vectorId, nodeId, length: content.length })
             });
 
-            // 5. Update Cache (Write-through)
+            // 5. Update Cache
             this.cache.set(`recent:${userId}`, { content, timestamp });
 
             return name;
-        } catch (error) {
-            // Rollback Vector Store
-            console.error("Failed to save to SQLite, rolling back Vector Store...", error);
-            await this.vectorDb.deleteVectors([vectorId]);
-            throw error;
-        }
+        });
     }
 
     /**
@@ -86,13 +88,13 @@ export class MemoryManager {
     async search(query: string, userId: string): Promise<any[]> {
         // 1. Vector Search
         const queryVec = await this.embedder.embed(query);
-        const vectorResults = await this.vectorDb.search(queryVec, userId, 5);
+        const vectorResults = await this.vectorDb.search(queryVec, userId, { limit: 5 });
 
         // 2. Hydrate & Expand from Graph
         const results = [];
         for (const vecRes of vectorResults) {
             // Find SQLite Node by embeddingId
-            const node = await db.query.nodes.findFirst({
+            const node = await getDatabase().query.nodes.findFirst({
                 where: eq(nodes.embeddingId, vecRes.id)
             });
 

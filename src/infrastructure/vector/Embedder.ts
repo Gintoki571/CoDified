@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Mutex } from 'async-mutex';
 
 export class Embedder {
     private static instance: Embedder;
@@ -8,6 +9,7 @@ export class Embedder {
     private cacheDir: string;
     private modelName: string = 'Xenova/all-MiniLM-L6-v2';
     private mockMode: boolean = false;
+    private initMutex = new Mutex();
 
     private constructor() {
         this.cacheDir = path.join(process.cwd(), 'data', 'cache', 'embeddings');
@@ -24,20 +26,22 @@ export class Embedder {
     }
 
     private async getPipeline() {
-        if (this.mockMode) return null;
-        if (!this.pipe) {
-            try {
-                console.log(`Loading embedding model: ${this.modelName}...`);
-                // Dynamic import to handle installation failure gracefully
-                const { pipeline } = await import('@xenova/transformers');
-                this.pipe = await pipeline('feature-extraction', this.modelName);
-            } catch (error) {
-                console.warn('⚠️  @xenova/transformers not available. Switching to MOCK MODE.');
-                this.mockMode = true;
-                return null;
+        return await this.initMutex.runExclusive(async () => {
+            if (this.mockMode) return null;
+            if (!this.pipe) {
+                try {
+                    console.log(`Loading embedding model: ${this.modelName}...`);
+                    // Dynamic import to handle installation failure gracefully
+                    const { pipeline } = await import('@xenova/transformers');
+                    this.pipe = await pipeline('feature-extraction', this.modelName);
+                } catch (error) {
+                    console.warn('⚠️  @xenova/transformers not available. Switching to MOCK MODE.');
+                    this.mockMode = true;
+                    return null;
+                }
             }
-        }
-        return this.pipe;
+            return this.pipe;
+        });
     }
 
     /**

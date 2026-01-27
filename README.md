@@ -1,4 +1,4 @@
-# ReMem Engine (Embedded Edition)
+# Thread (Embedded Edition)
 
 A high-performance, local-first memory engine for AI Agents.
 It combines **Temporal**, **Semantic**, and **Graph** retrieval capabilities without requiring Docker.

@@ -2,10 +2,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { MemoryManager } from '../../core/memory/MemoryManager';
-import { RememError } from '../../core/errors';
+import { RememError, ErrorFactory } from '../../core/errors';
+import { RateLimiter } from '../../core/security/RateLimiter';
 
-// Initialize Manager
+// Initialize Managers
 const memoryManager = new MemoryManager();
+const rateLimiter = RateLimiter.getInstance();
 
 // Create MCP Server
 const server = new McpServer({
@@ -25,6 +27,14 @@ server.tool(
     },
     async (args: { text: string; metadata?: string; userId: string }) => {
         try {
+            // Security: Rate Limit Check
+            if (!rateLimiter.consume(args.userId)) {
+                throw ErrorFactory.validation('Rate limit exceeded', {
+                    code: 'RATE_LIMIT_EXCEEDED',
+                    suggestion: 'Please wait a minute before sending more requests'
+                });
+            }
+
             const meta = args.metadata ? JSON.parse(args.metadata) : {};
             const name = await memoryManager.addMemory(args.text, args.userId, meta);
             return {
@@ -52,6 +62,14 @@ server.tool(
     },
     async (args: { query: string; userId: string }) => {
         try {
+            // Security: Rate Limit Check
+            if (!rateLimiter.consume(args.userId)) {
+                throw ErrorFactory.validation('Rate limit exceeded', {
+                    code: 'RATE_LIMIT_EXCEEDED',
+                    suggestion: 'Please wait a minute before sending more requests'
+                });
+            }
+
             const results = await memoryManager.search(args.query, args.userId);
 
             // Format results for LLM consumption

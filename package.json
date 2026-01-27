@@ -1,0 +1,40 @@
+{
+  "name": "codified",
+  "version": "1.0.0",
+  "description": "\"# CoDified\"",
+  "main": "index.js",
+  "scripts": {
+    "test": "tsx tests/integration/full_flow.test.ts",
+    "build": "tsc",
+    "start": "node dist/interface/mcp/tools.js",
+    "dev": "tsx src/interface/mcp/tools.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gintoki571/CoDified.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Gintoki571/CoDified/issues"
+  },
+  "homepage": "https://github.com/Gintoki571/CoDified#readme",
+  "dependencies": {
+    "@lancedb/lancedb": "^0.23.0",
+    "@types/node": "^25.0.10",
+    "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.1",
+    "lru-cache": "^11.2.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/uuid": "^10.0.0",
+    "drizzle-kit": "^0.31.8"
+  }
+}

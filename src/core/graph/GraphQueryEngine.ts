@@ -1,12 +1,16 @@
 import { db } from '../../infrastructure/database';
 import { nodes, edges } from '../../infrastructure/database/schema';
-import { sql } from 'drizzle-orm';
+import { sql, inArray } from 'drizzle-orm';
 
+// -------------------------------------------------------------------------
+// Types
+// -------------------------------------------------------------------------
 export interface GraphNode {
     id: number;
     name: string;
-    type: string;
+    type: string | null;
     content: string | null;
+    metadata?: Record<string, unknown>;
     depth: number;
 }
 
@@ -14,77 +18,92 @@ export interface GraphEdge {
     source: string;
     target: string;
     type: string;
-    weight: number;
+    weight: number | null;
 }
 
+export interface SubgraphResult {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+}
+
+// -------------------------------------------------------------------------
+// Hydration Helper (Step 8 from Implementation Plan)
+// -------------------------------------------------------------------------
+/**
+ * Converts raw SQL rows into properly typed GraphNode objects.
+ * Handles JSON parsing of metadata if present.
+ */
+export function hydrateNodes(rawRows: any[]): GraphNode[] {
+    return rawRows.map(row => ({
+        id: row.id,
+        name: row.name,
+        type: row.type || 'concept',
+        content: row.content || null,
+        metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata,
+        depth: row.depth ?? 0
+    }));
+}
+
+// -------------------------------------------------------------------------
+// Graph Query Engine
+// -------------------------------------------------------------------------
 export class GraphQueryEngine {
     /**
      * Retrieves a subgraph starting from a specific node up to a certain depth.
      * Uses Recursive Common Table Expressions (CTE) for efficient native graph traversal.
      * 
+     * AUDIT FIX (CRIT-10): Uses integer ID path with comma separators to prevent
+     * false positives in cycle detection (e.g., id 1 vs 11).
+     * 
      * @param startNodeName - The name of the starting node (Entry Point)
      * @param userId - Context validation (Multi-tenant)
      * @param maxDepth - How many hops to traverse (Default: 2)
      */
-    async findSubgraph(startNodeName: string, userId: string, maxDepth: number = 2): Promise<{ nodes: GraphNode[], edges: GraphEdge[] }> {
-        // Validation per audit requirement
-        if (!startNodeName || !userId) return { nodes: [], edges: [] };
+    async findSubgraph(startNodeName: string, userId: string, maxDepth: number = 2): Promise<SubgraphResult> {
+        // Input Validation
+        if (!startNodeName?.trim() || !userId?.trim()) {
+            return { nodes: [], edges: [] };
+        }
 
-        // Recursive CTE Query
-        // 1. Anchor Member: Select the start node
-        // 2. Recursive Member: Join edges where source is previous node
-        // 3. Cycle Detection: Check if target ID is already in the visited path
-        const query = sql`
+        // Recursive CTE Query with proper cycle detection
+        const nodeQuery = sql`
             WITH RECURSIVE traversal_path(id, name, type, content, depth, visited_ids) AS (
                 -- Anchor: The Start Node
                 SELECT 
                     n.id, n.name, n.type, n.content, 0 as depth, 
-                    ',' || n.id || ',' as visited_ids
+                    ',' || CAST(n.id AS TEXT) || ',' as visited_ids
                 FROM nodes n
                 WHERE n.name = ${startNodeName} AND n.user_id = ${userId}
                 
                 UNION ALL
                 
-                -- Recursive Step
+                -- Recursive Step: Traverse outgoing edges
                 SELECT 
                     target.id, target.name, target.type, target.content, tp.depth + 1,
-                    tp.visited_ids || target.id || ','
+                    tp.visited_ids || CAST(target.id AS TEXT) || ','
                 FROM nodes target
                 JOIN edges e ON e.target_id = target.id
                 JOIN traversal_path tp ON e.source_id = tp.id
                 WHERE 
                     e.user_id = ${userId} 
                     AND tp.depth < ${maxDepth}
-                    -- Cycle Detection: Verify target.id is not in visited_ids string
-                    AND instr(tp.visited_ids, ',' || target.id || ',') = 0
+                    -- Cycle Detection: Check if target.id is already in visited path
+                    AND instr(tp.visited_ids, ',' || CAST(target.id AS TEXT) || ',') = 0
             )
-            SELECT DISTINCT * FROM traversal_path;
+            SELECT DISTINCT id, name, type, content, depth FROM traversal_path;
         `;
 
-        const nodeResults = await db.all(query) as GraphNode[];
+        const rawNodes = await db.all(nodeQuery);
+        const graphNodes = hydrateNodes(rawNodes);
 
-        if (nodeResults.length === 0) return { nodes: [], edges: [] };
+        if (graphNodes.length === 0) {
+            return { nodes: [], edges: [] };
+        }
 
-        // Fetch Edges connecting these nodes
-        // This is a separate optimized query to get the connections between the found set
-        const nodeNames = nodeResults.map(n => n.name);
-        if (nodeNames.length === 0) return { nodes: nodeResults, edges: [] };
+        // Fetch edges connecting discovered nodes
+        const foundIds = graphNodes.map(n => n.id);
 
-        const edgeQuery = await db.select({
-            source: sql<string>`src.name`,
-            target: sql<string>`tgt.name`,
-            type: edges.type,
-            weight: edges.weight
-        })
-            .from(edges)
-            .innerJoin(nodes, sql`${edges.sourceId} = ${nodes}.id`).as('src') // Alias handling in raw SQL might be safer here or via defines
-        // Simplification: Let's use Drizzle's query builder for the Edges part as it's non-recursive
-        // Wait, Drizzle aliases are tricky. Let's stick to strict raw SQL for the edges to ensure correctness with the IDs we found.
-
-        // Re-write Edge Query safely
-        const foundIds = nodeResults.map(n => n.id);
-        // We need edges where BOTH source and target are in the found set
-        const edgesRaw = await db.all(sql`
+        const edgeQuery = sql`
             SELECT 
                 src.name as source, 
                 tgt.name as target, 
@@ -95,46 +114,103 @@ export class GraphQueryEngine {
             JOIN nodes tgt ON e.target_id = tgt.id
             WHERE 
                 e.user_id = ${userId}
-                AND e.source_id IN ${foundIds}
-                AND e.target_id IN ${foundIds}
-        `);
+                AND e.source_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+                AND e.target_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+        `;
+
+        const rawEdges = await db.all(edgeQuery);
 
         return {
-            nodes: nodeResults,
-            edges: edgesRaw as GraphEdge[]
+            nodes: graphNodes,
+            edges: rawEdges as GraphEdge[]
         };
     }
 
     /**
      * Finds the shortest path between two nodes using BFS.
      * Useful for checking "How is X related to Y?"
+     * 
+     * @returns The path as a string (e.g., "A->B->C") or null if no path exists
      */
-    async findPath(startNode: string, endNode: string, userId: string, maxDepth: number = 4) {
-        // Bidirectional search or simple BFS CTE
-        // Using simple BFS CTE for now
+    async findPath(
+        startNode: string,
+        endNode: string,
+        userId: string,
+        maxDepth: number = 5
+    ): Promise<{ path: string; depth: number } | null> {
+        // Input Validation
+        if (!startNode?.trim() || !endNode?.trim() || !userId?.trim()) {
+            return null;
+        }
+
+        // Early exit: Same node
+        if (startNode === endNode) {
+            return { path: startNode, depth: 0 };
+        }
+
         const query = sql`
             WITH RECURSIVE path_finding(id, name, path_names, depth, found) AS (
+                -- Anchor
                 SELECT 
-                    n.id, n.name, n.name, 0, (n.name = ${endNode})
+                    n.id, 
+                    n.name, 
+                    n.name as path_names, 
+                    0, 
+                    CASE WHEN n.name = ${endNode} THEN 1 ELSE 0 END as found
                 FROM nodes n
                 WHERE n.name = ${startNode} AND n.user_id = ${userId}
                 
                 UNION ALL
                 
+                -- Recursive expansion
                 SELECT 
-                    tgt.id, tgt.name, pf.path_names || '->' || tgt.name, pf.depth + 1, (tgt.name = ${endNode})
+                    tgt.id, 
+                    tgt.name, 
+                    pf.path_names || ' -> ' || tgt.name, 
+                    pf.depth + 1,
+                    CASE WHEN tgt.name = ${endNode} THEN 1 ELSE 0 END
                 FROM nodes tgt
                 JOIN edges e ON e.target_id = tgt.id
                 JOIN path_finding pf ON e.source_id = pf.id
                 WHERE 
                     e.user_id = ${userId}
                     AND pf.depth < ${maxDepth}
-                    AND pf.found = 0 -- Stop expanding if we found logic already (handled by limit usually)
-                    AND instr(pf.path_names, tgt.name) = 0 -- Cycle verification
+                    AND pf.found = 0
+                    -- Cycle prevention using substring check
+                    AND instr(pf.path_names, tgt.name) = 0
             )
-            SELECT * FROM path_finding WHERE name = ${endNode} ORDER BY depth ASC LIMIT 1;
+            SELECT path_names as path, depth 
+            FROM path_finding 
+            WHERE found = 1 
+            ORDER BY depth ASC 
+            LIMIT 1;
         `;
 
-        return await db.get(query);
+        const result = await db.get(query) as { path: string; depth: number } | undefined;
+        return result || null;
+    }
+
+    /**
+     * Gets direct neighbors of a node (1-hop).
+     * Faster than findSubgraph for simple lookups.
+     */
+    async getNeighbors(nodeName: string, userId: string): Promise<GraphNode[]> {
+        const query = sql`
+            SELECT DISTINCT 
+                n.id, n.name, n.type, n.content, 1 as depth
+            FROM nodes n
+            JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
+            JOIN nodes center ON (
+                (e.source_id = center.id AND e.target_id = n.id) OR
+                (e.target_id = center.id AND e.source_id = n.id)
+            )
+            WHERE center.name = ${nodeName} 
+              AND center.user_id = ${userId}
+              AND e.user_id = ${userId}
+              AND n.name != ${nodeName}
+        `;
+
+        const rawNodes = await db.all(query);
+        return hydrateNodes(rawNodes);
     }
 }

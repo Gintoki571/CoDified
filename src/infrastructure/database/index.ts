@@ -8,7 +8,7 @@ import { ENV } from '../../config/env';
 import { Logger } from '../../core/logging/Logger';
 
 // Database file path - stored in root data directory
-const DB_FILENAME = ENV.NODE_ENV === 'test' ? 'codified_test.db' : 'codified.db';
+const DB_FILENAME = ENV.NODE_ENV === 'test' ? 'codified_test_v2.db' : 'codified_v2.db';
 const DB_PATH = path.join(CONFIG.PATHS.DATA_DIR, DB_FILENAME);
 
 let db: BetterSQLite3Database<typeof schema> | null = null;
@@ -40,44 +40,41 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
         CREATE TABLE IF NOT EXISTS nodes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            node_type TEXT NOT NULL,
-            metadata TEXT,
-            version INTEGER NOT NULL DEFAULT 1,
-            user_id TEXT NOT NULL DEFAULT 'default',
+            type TEXT DEFAULT 'concept',
+            content TEXT,
+            user_id TEXT NOT NULL,
+            embedding_id TEXT,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            UNIQUE(name, user_id)
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
         
         CREATE TABLE IF NOT EXISTS edges (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_node TEXT NOT NULL,
-            to_node TEXT NOT NULL,
-            edge_type TEXT NOT NULL,
+            source_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+            target_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+            type TEXT NOT NULL DEFAULT 'RELATED_TO',
             weight REAL DEFAULT 1.0,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            FOREIGN KEY (from_node, user_id) REFERENCES nodes(name, user_id),
-            FOREIGN KEY (to_node, user_id) REFERENCES nodes(name, user_id)
+            user_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+        
+        CREATE TABLE IF NOT EXISTS memory_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            description TEXT,
+            metadata TEXT,
+            user_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
         
         CREATE TABLE IF NOT EXISTS embeddings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_name TEXT NOT NULL,
-            embedding_id TEXT NOT NULL,
-            text_content TEXT NOT NULL,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            FOREIGN KEY (node_name, user_id) REFERENCES nodes(name, user_id)
+            id TEXT PRIMARY KEY,
+            node_id INTEGER REFERENCES nodes(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at INTEGER DEFAULT (unixepoch())
         );
         
-        CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
-        CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(node_type);
-        CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_node);
-        CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_node);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(from_node, to_node, edge_type, user_id);
-        CREATE INDEX IF NOT EXISTS idx_embeddings_node ON embeddings(node_name);
-
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             role TEXT NOT NULL,
@@ -87,6 +84,13 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
 
+        CREATE UNIQUE INDEX IF NOT EXISTS uid_nodes_name_user ON nodes(name, user_id);
+        CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at);
+        CREATE INDEX IF NOT EXISTS idx_nodes_user ON nodes(user_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_user ON edges(user_id);
+        CREATE INDEX IF NOT EXISTS idx_events_created ON memory_events(created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_summarized ON messages(is_summarized);
         CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
     `);

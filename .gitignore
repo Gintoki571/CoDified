@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 *.log
+migrate.ts
+AUDIT_REPORT.md
+FIXES_APPLIED.md

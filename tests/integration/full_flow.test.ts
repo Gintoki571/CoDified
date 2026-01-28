@@ -29,17 +29,17 @@ async function runIntegrationTest() {
     console.log(`   Top Result: "${content.substring(0, 50)}..."`);
     assert.ok(content.includes('Project Alpha'), 'Result should match query content');
 
-    // 3. Test Graph Context (Auto-linking?)
-    // Note: Our current logic doesn't auto-create 'mentions' edges yet unless we run explicit extraction.
-    // The Sprint Plan "Step 3.1.3 Entity Extraction" was "Entity Extraction (LLM-based)".
-    // I didn't verify if I implemented that in MemoryManager.addMemory.
-    // Checking MemoryManager code... it just does 'addMemory'. It does NOT call an extraction service yet.
-    // So Graph Context might be empty. That is expected for Phase 1.
-    if (firstResult.context) {
-        console.log(`   Graph Context: ${firstResult.context.nodes.length} nodes`);
-    } else {
-        console.log('   Graph Context: None (Expected until Entity Extraction is active)');
-    }
+    // 3. Test readGraph
+    console.log('[Step 3] Testing readGraph...');
+    const graph = await manager.readGraph(testUser, 10, 0);
+    console.log(`✅ readGraph returned ${graph.nodes.length} nodes and ${graph.edges.length} edges`);
+    assert.strictEqual(graph.nodes.length, 1, 'Should have exactly 1 node for this user');
+
+    // 4. Test searchNodes (Keyword search)
+    console.log('[Step 4] Testing searchNodes for "Alpha"...');
+    const searchRes = await manager.searchNodes('Alpha', testUser);
+    console.log(`✅ searchNodes returned ${searchRes.nodes.length} nodes`);
+    assert.ok(searchRes.nodes.length > 0, 'Should find the node via keyword search');
 
     console.log('🎉 Integration Test Passed!');
 

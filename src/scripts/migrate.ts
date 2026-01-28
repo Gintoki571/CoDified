@@ -1,10 +1,10 @@
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { db, closeDatabase } from '../infrastructure/database';
+import { getDatabase, closeDatabase } from '../infrastructure/database';
 
 async function runMigrations() {
     console.log('📦 Running Database Migrations...');
     try {
-        await migrate(db, { migrationsFolder: './drizzle' });
+        await migrate(getDatabase() as any, { migrationsFolder: './drizzle' });
         console.log('✅ Migrations applied successfully!');
     } catch (err) {
         console.error('❌ Migration failed:', err);

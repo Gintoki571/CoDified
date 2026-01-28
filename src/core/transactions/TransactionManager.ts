@@ -15,7 +15,8 @@ export class TransactionManager {
     private inTransactionState: boolean = false;
     private transactionDepth: number = 0;
     private rollbackActions: Array<{ action: () => Promise<void>, description: string }> = [];
-    private mutex: Mutex = new Mutex();
+    private userMutexes: Map<string, Mutex> = new Map();
+    private globalMutex: Mutex = new Mutex(); // Fallback for system-wide tasks
 
     private constructor() { }
 
@@ -29,12 +30,25 @@ export class TransactionManager {
     /**
      * Executes an operation within a SQLite transaction.
      * Supports nesting using SQLite's SAVEPOINT mechanism.
+     * @param userId Optional key for concurrent-friendly locking
      */
-    async executeTransaction<T>(operation: () => Promise<T>): Promise<T> {
-        return await this.mutex.runExclusive(async () => {
+    async executeTransaction<T>(operation: () => Promise<T>, userId?: string): Promise<T> {
+        let mutex = this.globalMutex;
+        if (userId) {
+            if (!this.userMutexes.has(userId)) {
+                this.userMutexes.set(userId, new Mutex());
+            }
+            mutex = this.userMutexes.get(userId)!;
+        }
+
+        return await mutex.runExclusive(async () => {
             if (this.transactionDepth > 0) {
                 // Nested transaction: use savepoint
-                const savepointName = `sp_${this.transactionDepth}_${Date.now()}`;
+                // Sanitize savepoint name to prevent injection
+                const timestamp = Date.now();
+                const safeDepth = Math.floor(this.transactionDepth);
+                const savepointName = `sp_${safeDepth}_${timestamp}`;
+
                 this.transactionDepth++;
 
                 try {
@@ -76,6 +90,8 @@ export class TransactionManager {
 
     private createSavepoint(name: string): void {
         const sqlite = getSqliteInstance();
+        // Doubly ensure name is safe (though we generate it ourselves)
+        if (!/^[a-zA-Z0-9_]+$/.test(name)) throw new Error('Invalid savepoint name');
         sqlite.prepare(`SAVEPOINT ${name}`).run();
         Logger.debug('TransactionManager', `Created savepoint: ${name}`);
     }

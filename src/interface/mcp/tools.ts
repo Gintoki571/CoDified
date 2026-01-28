@@ -7,6 +7,42 @@ import {
 import { MemoryManager } from '../../core/memory/MemoryManager';
 import { RememError, ErrorFactory } from '../../core/errors';
 import { RateLimiter } from '../../core/security/RateLimiter';
+import { z } from 'zod';
+
+// -------------------------------------------------------------------------
+// Validation Schemas
+// -------------------------------------------------------------------------
+const MemoryContentSchema = z.string().min(1).max(50000); // 50k chars max
+const UserIdSchema = z.string().min(1).max(100);
+const QuerySchema = z.string().min(1).max(1000);
+
+const AddMemorySchema = z.object({
+    text: MemoryContentSchema,
+    metadata: z.string().optional(),
+    userId: UserIdSchema.optional().default('default_user')
+});
+
+const SearchMemorySchema = z.object({
+    query: QuerySchema,
+    userId: UserIdSchema.optional().default('default_user')
+});
+
+const ReadGraphSchema = z.object({
+    limit: z.number().int().min(1).max(500).optional().default(100),
+    offset: z.number().int().min(0).optional().default(0),
+    userId: UserIdSchema.optional().default('default_user')
+});
+
+const SearchNodesSchema = z.object({
+    query: QuerySchema,
+    userId: UserIdSchema.optional().default('default_user')
+});
+
+const HybridSearchSchema = z.object({
+    query: QuerySchema,
+    userId: UserIdSchema.optional().default('default_user'),
+    depth: z.number().int().min(1).max(3).optional().default(1)
+});
 
 // Initialize Managers
 const memoryManager = new MemoryManager();
@@ -69,6 +105,43 @@ const toolDefinitions = [
             },
             required: ["query"]
         }
+    },
+    {
+        name: "read_graph",
+        description: "Read a paged slice of the entire knowledge graph",
+        inputSchema: {
+            type: "object",
+            properties: {
+                limit: { type: "number", description: "Max nodes to return", default: 100 },
+                offset: { type: "number", description: "Offset for paging", default: 0 },
+                userId: { type: "string", description: "User ID filter", default: "default_user" }
+            }
+        }
+    },
+    {
+        name: "search_nodes",
+        description: "Search for specific nodes by keyword (name, content, or type)",
+        inputSchema: {
+            type: "object",
+            properties: {
+                query: { type: "string", description: "Keyword to search for" },
+                userId: { type: "string", description: "User ID filter", default: "default_user" }
+            },
+            required: ["query"]
+        }
+    },
+    {
+        name: "hybrid_search",
+        description: "Advanced search combining semantic vector lookup, graph expansion, and LLM summarization",
+        inputSchema: {
+            type: "object",
+            properties: {
+                query: { type: "string", description: "The complex question or topic to research" },
+                userId: { type: "string", description: "User ID filter", default: "default_user" },
+                depth: { type: "number", description: "Graph traversal depth (1-3)", default: 1 }
+            },
+            required: ["query"]
+        }
     }
 ];
 
@@ -86,7 +159,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Handle CallToolRequest
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    
+
     // Security: Rate Limit Check
     const userId = (args?.userId as string) || 'default_user';
     if (!rateLimiter.consume(userId)) {
@@ -98,16 +171,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     try {
         if (name === "add_memory") {
-            const text = args?.text as string;
-            const metadata = args?.metadata as string | undefined;
-            
-            if (!text) {
-                throw ErrorFactory.validation('Missing required parameter: text');
-            }
+            const validated = AddMemorySchema.parse(args);
+            const { text, metadata } = validated;
+            const targetUserId = validated.userId || 'default_user';
 
             const meta = metadata ? JSON.parse(metadata) : {};
-            const memoryName = await memoryManager.addMemory(text, userId, meta);
-            
+            const memoryName = await memoryManager.addMemory(text, targetUserId, meta);
+
             return {
                 content: [
                     {
@@ -117,13 +187,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 ]
             };
         } else if (name === "search_memory") {
-            const query = args?.query as string;
-            
-            if (!query) {
-                throw ErrorFactory.validation('Missing required parameter: query');
-            }
+            const validated = SearchMemorySchema.parse(args);
+            const { query } = validated;
+            const targetUserId = validated.userId || 'default_user';
 
-            const results = await memoryManager.search(query, userId);
+            const results = await memoryManager.search(query, targetUserId);
 
             // Format results for LLM consumption
             const readable = results.map(r => {
@@ -142,10 +210,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     }
                 ]
             };
+        } else if (name === "read_graph") {
+            const validated = ReadGraphSchema.parse(args);
+            const { limit, offset } = validated;
+            const targetUserId = validated.userId || 'default_user';
+
+            const result = await memoryManager.readGraph(targetUserId, limit, offset);
+            return {
+                content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+            };
+        } else if (name === "search_nodes") {
+            const validated = SearchNodesSchema.parse(args);
+            const { query } = validated;
+            const targetUserId = validated.userId || 'default_user';
+
+            const result = await memoryManager.searchNodes(query, targetUserId);
+            return {
+                content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+            };
+        } else if (name === "hybrid_search") {
+            const validated = HybridSearchSchema.parse(args);
+            const { query, depth } = validated;
+            const targetUserId = validated.userId || 'default_user';
+
+            const results = await memoryManager.search(query, targetUserId);
+            const summary = await memoryManager.summarize(query, results);
+
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `### Summary\n${summary}\n\n### Supporting Context\n` + results.map(r => {
+                            const content = r.memory.content || 'No content';
+                            return `- ${content}`;
+                        }).join('\n')
+                    }
+                ]
+            };
         } else {
             throw ErrorFactory.validation(`Unknown tool: ${name}`);
         }
     } catch (err: unknown) {
+        if (err instanceof z.ZodError) {
+            const issues = err.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ');
+            throw new Error(`Validation Error: ${issues}`);
+        }
         const message = err instanceof RememError ? err.toUserFriendly() :
             (err instanceof Error ? err.message : String(err));
         throw new Error(`Error executing tool ${name}: ${message}`);

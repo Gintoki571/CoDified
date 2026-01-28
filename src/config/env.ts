@@ -18,9 +18,11 @@ const envSchema = z.object({
     // LLM Configuration
     OPENAI_API_KEY: z.string().optional()
         .refine(val => {
-            if (!val) return true; // Optional
-            return val.startsWith('sk-') || val === 'lm-studio';
-        }, { message: "OPENAI_API_KEY must start with 'sk-' or be 'lm-studio'" }),
+            if (process.env.NODE_ENV === 'production') {
+                return !!val && val.length > 20;
+            }
+            return true;
+        }, { message: "OPENAI_API_KEY is required and must be a valid format in production" }),
 
     OPENAI_BASE_URL: z.string().url().optional(),
 

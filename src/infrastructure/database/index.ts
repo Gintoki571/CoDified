@@ -46,7 +46,8 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
             embedding_id TEXT,
             metadata TEXT,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+            updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            status TEXT DEFAULT 'PENDING'
         );
         
         CREATE TABLE IF NOT EXISTS edges (
@@ -106,6 +107,12 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
         CREATE INDEX IF NOT EXISTS idx_messages_summarized ON messages(is_summarized);
         CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
     `);
+
+    // Ensure metadata columns exist for migration from older versions
+    try { sqlite.exec(`ALTER TABLE nodes ADD COLUMN metadata TEXT;`); } catch (e) { }
+    try { sqlite.exec(`ALTER TABLE nodes ADD COLUMN status TEXT DEFAULT 'PENDING';`); } catch (e) { }
+    try { sqlite.exec(`ALTER TABLE edges ADD COLUMN metadata TEXT;`); } catch (e) { }
+    try { sqlite.exec(`ALTER TABLE memory_events ADD COLUMN metadata TEXT;`); } catch (e) { }
 
     Logger.info('DB', `SQLite database initialized at: ${dbPath}`);
     return db;

@@ -4,11 +4,14 @@ import * as path from 'path';
 import { Mutex } from 'async-mutex';
 import { CONFIG } from '../../config/config';
 import { ENV } from '../../config/env';
+import { LRUCache } from 'lru-cache';
+import { Logger } from '../../core/logging/Logger';
 
 export class Embedder {
     private static instance: Embedder;
     private pipe: any = null;
     private cacheDir: string;
+    private memoryCache: LRUCache<string, number[]>;
     private modelName: string = ENV.EMBEDDING_MODEL;
     private provider: string = ENV.LLM_PROVIDER;
     private mockMode: boolean = false;
@@ -19,6 +22,12 @@ export class Embedder {
         if (!fs.existsSync(this.cacheDir)) {
             fs.mkdirSync(this.cacheDir, { recursive: true });
         }
+
+        // Memory-bounded LRU cache (100MB approx if ~50k vectors)
+        this.memoryCache = new LRUCache({
+            max: 10000,
+            ttl: 24 * 60 * 60 * 1000 // 24 hours
+        });
     }
 
     public static getInstance(): Embedder {
@@ -34,11 +43,11 @@ export class Embedder {
             if (this.provider !== 'openai' && this.provider !== 'lmstudio') {
                 if (!this.pipe) {
                     try {
-                        console.error(`Loading local embedding model: ${this.modelName}...`);
+                        Logger.info('Embedder', `Loading local embedding model: ${this.modelName}...`);
                         const { pipeline } = await import('@xenova/transformers');
                         this.pipe = await pipeline('feature-extraction', this.modelName);
                     } catch (error) {
-                        console.error('⚠️  @xenova/transformers not available. Switching to MOCK MODE.');
+                        Logger.warn('Embedder', '⚠️  @xenova/transformers not available. Switching to MOCK MODE.');
                         this.mockMode = true;
                         return null;
                     }
@@ -74,8 +83,14 @@ export class Embedder {
             const data = await response.json();
             return data.data[0].embedding;
         } catch (error) {
-            console.error('External embedding failed, falling back to mock:', error);
-            // Secure randomness for mock embeddings (Defense in depth)
+            Logger.error('Embedder', 'External embedding failed:', error);
+
+            // Hard failure in production to prevent data degradation
+            if (ENV.NODE_ENV === 'production') {
+                throw error;
+            }
+
+            // Secure randomness for mock embeddings (Dev/Test only)
             const randomValues = new Float32Array(1536);
             crypto.randomFillSync(randomValues);
             return Array.from(randomValues);
@@ -91,18 +106,23 @@ export class Embedder {
             throw new Error('Input text cannot be empty');
         }
 
-        // 1. Check Cache
+        // 1. Check Memory Cache (L1)
         const hash = crypto.createHash('md5').update(text).digest('hex');
+        const memCached = this.memoryCache.get(hash);
+        if (memCached) return memCached;
+
+        // 2. Check Disk Cache (L2)
         const cachePath = path.join(this.cacheDir, `${hash}.json`);
 
         if (fs.existsSync(cachePath)) {
             try {
                 const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
                 if (Array.isArray(cached) && cached.length > 0) {
+                    this.memoryCache.set(hash, cached);
                     return cached;
                 }
             } catch (err) {
-                console.warn(`Failed to read cache for ${hash}`, err);
+                Logger.warn('Embedder', `Failed to read cache for ${hash}`, err);
             }
         }
 
@@ -115,7 +135,7 @@ export class Embedder {
             const pipe = await this.getPipeline();
             if (this.mockMode || !pipe) {
                 // Mock Embedding (384 dimensions for MiniLM)
-                console.error(`[MockEmbedder] Generating random vector for: "${text.substring(0, 20)}..."`);
+                Logger.error('Embedder', `[MockEmbedder] Generating random vector for: "${text.substring(0, 20)}..."`);
                 const randomValues = new Float32Array(384);
                 crypto.randomFillSync(randomValues);
                 embedding = Array.from(randomValues);
@@ -125,11 +145,12 @@ export class Embedder {
             }
         }
 
-        // 3. Save to Cache
+        // 3. Save to Cache (Both Labs)
         try {
+            this.memoryCache.set(hash, embedding);
             fs.writeFileSync(cachePath, JSON.stringify(embedding));
         } catch (err) {
-            console.error('Failed to write embedding cache', err);
+            Logger.error('Embedder', 'Failed to write embedding cache', err);
         }
 
         return embedding;

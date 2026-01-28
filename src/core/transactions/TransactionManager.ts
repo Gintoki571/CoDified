@@ -3,6 +3,7 @@
 import { getDatabase, getSqliteInstance } from '../../infrastructure/database';
 import { Logger } from '../logging/Logger';
 import { SagaStep } from './types';
+import { Mutex } from 'async-mutex';
 
 /**
  * TransactionManager
@@ -14,6 +15,7 @@ export class TransactionManager {
     private inTransactionState: boolean = false;
     private transactionDepth: number = 0;
     private rollbackActions: Array<{ action: () => Promise<void>, description: string }> = [];
+    private mutex: Mutex = new Mutex();
 
     private constructor() { }
 
@@ -29,34 +31,36 @@ export class TransactionManager {
      * Supports nesting using SQLite's SAVEPOINT mechanism.
      */
     async executeTransaction<T>(operation: () => Promise<T>): Promise<T> {
-        if (this.transactionDepth > 0) {
-            // Nested transaction: use savepoint
-            const savepointName = `sp_${this.transactionDepth}_${Date.now()}`;
-            this.transactionDepth++;
+        return await this.mutex.runExclusive(async () => {
+            if (this.transactionDepth > 0) {
+                // Nested transaction: use savepoint
+                const savepointName = `sp_${this.transactionDepth}_${Date.now()}`;
+                this.transactionDepth++;
 
+                try {
+                    this.createSavepoint(savepointName);
+                    const result = await operation();
+                    this.releaseSavepoint(savepointName);
+                    this.transactionDepth--;
+                    return result;
+                } catch (error) {
+                    this.rollbackToSavepoint(savepointName);
+                    this.transactionDepth--;
+                    throw error;
+                }
+            }
+
+            // Outer transaction
+            await this.beginTransaction();
             try {
-                this.createSavepoint(savepointName);
                 const result = await operation();
-                this.releaseSavepoint(savepointName);
-                this.transactionDepth--;
+                await this.commit();
                 return result;
             } catch (error) {
-                this.rollbackToSavepoint(savepointName);
-                this.transactionDepth--;
+                await this.rollback();
                 throw error;
             }
-        }
-
-        // Outer transaction
-        await this.beginTransaction();
-        try {
-            const result = await operation();
-            await this.commit();
-            return result;
-        } catch (error) {
-            await this.rollback();
-            throw error;
-        }
+        });
     }
 
     private async beginTransaction(): Promise<void> {

@@ -4,9 +4,11 @@ import path from 'path';
 import { ENV } from './env';
 
 /**
- * Helper to get the project root directory
+ * Helper to get the project root directory. 
+ * Derives the root from the file location to ensure consistency 
+ * even if the process is started from a different working directory.
  */
-const PROJECT_ROOT = process.cwd();
+const PROJECT_ROOT = path.resolve(__dirname, '../../..');
 
 interface ServerConfig {
     NAME: string;

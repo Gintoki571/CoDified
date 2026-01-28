@@ -64,8 +64,13 @@ export class EntityExtractor {
                 { jsonMode: true }
             );
 
+            // Sanitize raw string (remove control characters, potential script tags)
+            const sanitized = response
+                .replace(/[\x00-\x1F\x7F-\x9F]/g, "") // Remove control chars
+                .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ""); // Remove <script>
+
             // Parse and validate
-            const rawData = JSON.parse(response);
+            const rawData = JSON.parse(sanitized);
             return EntityExtractionSchema.parse(rawData);
         } catch (error) {
             console.error('Entity extraction failed:', error);

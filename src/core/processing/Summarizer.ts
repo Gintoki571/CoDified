@@ -1,4 +1,5 @@
 import { LLMProvider } from '../../infrastructure/llm/LLMProvider';
+import { Logger } from '../logging/Logger';
 
 const SUMMARIZATION_SYSTEM_PROMPT = `
 You are a helpful AI memory assistant. Your goal is to summarize the provided "Memory Fragments" in the context of the user's "Query".
@@ -53,7 +54,7 @@ SUMMARY:
                 { temperature: 0.5 }
             );
         } catch (error) {
-            console.error('Summarization failed:', error);
+            Logger.error('Summarizer', 'Summarization failed:', error);
             return "Failed to generate context summary.";
         }
     }

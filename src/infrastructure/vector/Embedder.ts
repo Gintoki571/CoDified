@@ -2,17 +2,20 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Mutex } from 'async-mutex';
+import { CONFIG } from '../../config/config';
+import { ENV } from '../../config/env';
 
 export class Embedder {
     private static instance: Embedder;
     private pipe: any = null;
     private cacheDir: string;
-    private modelName: string = 'Xenova/all-MiniLM-L6-v2';
+    private modelName: string = ENV.EMBEDDING_MODEL;
+    private provider: string = ENV.LLM_PROVIDER;
     private mockMode: boolean = false;
     private initMutex = new Mutex();
 
     private constructor() {
-        this.cacheDir = path.join(process.cwd(), 'data', 'cache', 'embeddings');
+        this.cacheDir = path.join(CONFIG.PATHS.DATA_DIR, 'cache', 'embeddings');
         if (!fs.existsSync(this.cacheDir)) {
             fs.mkdirSync(this.cacheDir, { recursive: true });
         }
@@ -28,20 +31,52 @@ export class Embedder {
     private async getPipeline() {
         return await this.initMutex.runExclusive(async () => {
             if (this.mockMode) return null;
-            if (!this.pipe) {
-                try {
-                    console.log(`Loading embedding model: ${this.modelName}...`);
-                    // Dynamic import to handle installation failure gracefully
-                    const { pipeline } = await import('@xenova/transformers');
-                    this.pipe = await pipeline('feature-extraction', this.modelName);
-                } catch (error) {
-                    console.warn('⚠️  @xenova/transformers not available. Switching to MOCK MODE.');
-                    this.mockMode = true;
-                    return null;
+            if (this.provider !== 'openai' && this.provider !== 'lmstudio') {
+                if (!this.pipe) {
+                    try {
+                        console.error(`Loading local embedding model: ${this.modelName}...`);
+                        const { pipeline } = await import('@xenova/transformers');
+                        this.pipe = await pipeline('feature-extraction', this.modelName);
+                    } catch (error) {
+                        console.error('⚠️  @xenova/transformers not available. Switching to MOCK MODE.');
+                        this.mockMode = true;
+                        return null;
+                    }
                 }
+                return this.pipe;
             }
-            return this.pipe;
+            return null; // External providers don't use local pipeline
         });
+    }
+
+    private async embedExternal(text: string): Promise<number[]> {
+        const baseUrl = ENV.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+        const apiKey = ENV.OPENAI_API_KEY || '';
+
+        try {
+            const response = await fetch(`${baseUrl}/embeddings`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`
+                },
+                body: JSON.stringify({
+                    input: text,
+                    model: this.modelName
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.text();
+                throw new Error(`Embedding API failed: ${response.status} - ${errorData}`);
+            }
+
+            const data = await response.json();
+            return data.data[0].embedding;
+        } catch (error) {
+            console.error('External embedding failed, falling back to mock:', error);
+            return Array.from({ length: 1536 }, () => Math.random());
+        }
     }
 
     /**
@@ -69,16 +104,20 @@ export class Embedder {
         }
 
         // 2. Generate Embedding
-        const pipe = await this.getPipeline();
         let embedding: number[];
 
-        if (this.mockMode || !pipe) {
-            // Mock Embedding (384 dimensions for MiniLM)
-            console.log(`[MockEmbedder] Generating random vector for: "${text.substring(0, 20)}..."`);
-            embedding = Array.from({ length: 384 }, () => Math.random());
+        if (this.provider === 'openai' || this.provider === 'lmstudio') {
+            embedding = await this.embedExternal(text);
         } else {
-            const result = await pipe(text, { pooling: 'mean', normalize: true });
-            embedding = Array.from(result.data as Float32Array);
+            const pipe = await this.getPipeline();
+            if (this.mockMode || !pipe) {
+                // Mock Embedding (384 dimensions for MiniLM)
+                console.error(`[MockEmbedder] Generating random vector for: "${text.substring(0, 20)}..."`);
+                embedding = Array.from({ length: 384 }, () => Math.random());
+            } else {
+                const result = await pipe(text, { pooling: 'mean', normalize: true });
+                embedding = Array.from(result.data as Float32Array);
+            }
         }
 
         // 3. Save to Cache

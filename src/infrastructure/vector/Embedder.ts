@@ -75,7 +75,10 @@ export class Embedder {
             return data.data[0].embedding;
         } catch (error) {
             console.error('External embedding failed, falling back to mock:', error);
-            return Array.from({ length: 1536 }, () => Math.random());
+            // Secure randomness for mock embeddings (Defense in depth)
+            const randomValues = new Float32Array(1536);
+            crypto.randomFillSync(randomValues);
+            return Array.from(randomValues);
         }
     }
 
@@ -113,7 +116,9 @@ export class Embedder {
             if (this.mockMode || !pipe) {
                 // Mock Embedding (384 dimensions for MiniLM)
                 console.error(`[MockEmbedder] Generating random vector for: "${text.substring(0, 20)}..."`);
-                embedding = Array.from({ length: 384 }, () => Math.random());
+                const randomValues = new Float32Array(384);
+                crypto.randomFillSync(randomValues);
+                embedding = Array.from(randomValues);
             } else {
                 const result = await pipe(text, { pooling: 'mean', normalize: true });
                 embedding = Array.from(result.data as Float32Array);

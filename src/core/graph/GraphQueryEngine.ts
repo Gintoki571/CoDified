@@ -67,6 +67,9 @@ export class GraphQueryEngine {
             return { nodes: [], edges: [] };
         }
 
+        // Explicitly parameterize to ensure NO string interpolation happens in CTE logic
+        const params = { name: startNodeName, userId };
+
         // Recursive CTE Query with proper cycle detection
         const nodeQuery = sql`
             WITH RECURSIVE traversal_path(id, name, type, content, depth, visited_ids) AS (
@@ -75,7 +78,7 @@ export class GraphQueryEngine {
                     n.id, n.name, n.type, n.content, 0 as depth, 
                     ',' || CAST(n.id AS TEXT) || ',' as visited_ids
                 FROM nodes n
-                WHERE n.name = ${startNodeName} AND n.user_id = ${userId}
+                WHERE n.name = ${params.name} AND n.user_id = ${params.userId}
                 
                 UNION ALL
                 
@@ -118,6 +121,100 @@ export class GraphQueryEngine {
                 e.user_id = ${userId}
                 AND e.source_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
                 AND e.target_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+        `;
+
+        const rawEdges = await getDatabase().all(edgeQuery);
+
+        return {
+            nodes: graphNodes,
+            edges: rawEdges as GraphEdge[]
+        };
+    }
+
+    /**
+     * Reads a paged slice of the entire graph for a specific user.
+     * Returns nodes and the edges connecting them.
+     */
+    async readGraph(userId: string, limit: number = 100, offset: number = 0): Promise<SubgraphResult> {
+        if (!userId?.trim()) return { nodes: [], edges: [] };
+
+        // 1. Fetch paged nodes (Securely Parameterized)
+        const nodeQuery = sql`
+            SELECT id, name, type, content, 0 as depth
+            FROM nodes
+            WHERE user_id = ${userId}
+            LIMIT ${Number(limit)} OFFSET ${Number(offset)}
+        `;
+
+        const rawNodes = await getDatabase().all(nodeQuery);
+        const graphNodes = hydrateNodes(rawNodes);
+
+        if (graphNodes.length === 0) {
+            return { nodes: [], edges: [] };
+        }
+
+        // 2. Fetch edges connecting these nodes
+        const foundIds = graphNodes.map(n => n.id);
+        const edgeQuery = sql`
+            SELECT 
+                src.name as source, 
+                tgt.name as target, 
+                e.type, 
+                e.weight 
+            FROM edges e
+            JOIN nodes src ON e.source_id = src.id
+            JOIN nodes tgt ON e.target_id = tgt.id
+            WHERE 
+                e.user_id = ${userId}
+                AND (e.source_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+                OR e.target_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)}))
+        `;
+
+        const rawEdges = await getDatabase().all(edgeQuery);
+
+        return {
+            nodes: graphNodes,
+            edges: rawEdges as GraphEdge[]
+        };
+    }
+
+    /**
+     * Searches nodes by keyword matching in name, content, or type.
+     */
+    async searchNodes(query: string, userId: string): Promise<SubgraphResult> {
+        if (!userId?.trim() || !query?.trim()) return { nodes: [], edges: [] };
+
+        const safeQuery = `%${query}%`;
+        const nodeQuery = sql`
+            SELECT id, name, type, content, 0 as depth
+            FROM nodes
+            WHERE user_id = ${userId}
+              AND (name LIKE ${safeQuery} OR content LIKE ${safeQuery} OR type LIKE ${safeQuery})
+            LIMIT 50
+        `;
+
+        const rawNodes = await getDatabase().all(nodeQuery);
+        const graphNodes = hydrateNodes(rawNodes);
+
+        if (graphNodes.length === 0) {
+            return { nodes: [], edges: [] };
+        }
+
+        // Fetch edges between these nodes for context
+        const foundIds = graphNodes.map(n => n.id);
+        const edgeQuery = sql`
+            SELECT 
+                src.name as source, 
+                tgt.name as target, 
+                e.type, 
+                e.weight 
+            FROM edges e
+            JOIN nodes src ON e.source_id = src.id
+            JOIN nodes tgt ON e.target_id = tgt.id
+            WHERE 
+                e.user_id = ${userId}
+                AND (e.source_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+                OR e.target_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)}))
         `;
 
         const rawEdges = await getDatabase().all(edgeQuery);
@@ -198,23 +295,57 @@ export class GraphQueryEngine {
      * Gets direct neighbors of a node (1-hop).
      * Faster than findSubgraph for simple lookups.
      */
-    async getNeighbors(nodeName: string, userId: string): Promise<GraphNode[]> {
+    /**
+     * Bidirectional recursive context discovery.
+     * Follows both outgoing and incoming edges to find the full semantic harbor of a node.
+     */
+    async findDeepContext(startNodeName: string, userId: string, maxDepth: number = 2): Promise<SubgraphResult> {
+        validateNodeName(startNodeName);
+        if (!userId?.trim()) return { nodes: [], edges: [] };
+
         const query = sql`
-            SELECT DISTINCT 
-                n.id, n.name, n.type, n.content, 1 as depth
-            FROM nodes n
-            JOIN edges e ON (e.target_id = n.id OR e.source_id = n.id)
-            JOIN nodes center ON (
-                (e.source_id = center.id AND e.target_id = n.id) OR
-                (e.target_id = center.id AND e.source_id = n.id)
+            WITH RECURSIVE deep_traversal(id, name, type, content, depth, visited_ids) AS (
+                -- Anchor
+                SELECT n.id, n.name, n.type, n.content, 0, ',' || CAST(n.id AS TEXT) || ','
+                FROM nodes n
+                WHERE n.name = ${startNodeName} AND n.user_id = ${userId}
+
+                UNION ALL
+
+                -- Bidirectional Step
+                SELECT target.id, target.name, target.type, target.content, dt.depth + 1,
+                       dt.visited_ids || CAST(target.id AS TEXT) || ','
+                FROM nodes target
+                JOIN edges e ON (e.target_id = target.id OR e.source_id = target.id)
+                JOIN deep_traversal dt ON (e.source_id = dt.id OR e.target_id = dt.id)
+                WHERE e.user_id = ${userId}
+                  AND dt.depth < ${maxDepth}
+                  AND instr(dt.visited_ids, ',' || CAST(target.id AS TEXT) || ',') = 0
             )
-            WHERE center.name = ${nodeName} 
-              AND center.user_id = ${userId}
-              AND e.user_id = ${userId}
-              AND n.name != ${nodeName}
+            SELECT DISTINCT id, name, type, content, depth FROM deep_traversal;
         `;
 
         const rawNodes = await getDatabase().all(query);
-        return hydrateNodes(rawNodes);
+        const graphNodes = hydrateNodes(rawNodes);
+
+        if (graphNodes.length === 0) return { nodes: [], edges: [] };
+
+        const foundIds = graphNodes.map(n => n.id);
+        const edgeQuery = sql`
+            SELECT src.name as source, tgt.name as target, e.type, e.weight 
+            FROM edges e
+            JOIN nodes src ON e.source_id = src.id
+            JOIN nodes tgt ON e.target_id = tgt.id
+            WHERE e.user_id = ${userId}
+              AND e.source_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+              AND e.target_id IN (${sql.join(foundIds.map(id => sql`${id}`), sql`, `)})
+        `;
+
+        const rawEdges = await getDatabase().all(edgeQuery);
+
+        return {
+            nodes: graphNodes,
+            edges: rawEdges as GraphEdge[]
+        };
     }
 }

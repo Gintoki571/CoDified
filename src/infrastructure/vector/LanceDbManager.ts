@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Mutex } from 'async-mutex';
 import { validateNodeName, escapeSqlString } from '../../core/validation';
+import { CONFIG } from '../../config/config';
 
 // -------------------------------------------------------------------------
 // Types
@@ -52,7 +53,8 @@ export class LanceDbManager {
     private async getDb(): Promise<lancedb.Connection> {
         return await this.initMutex.runExclusive(async () => {
             if (!this.db) {
-                const dbPath = path.join(process.cwd(), 'data', 'lancedb');
+                // Use CONFIG.PATHS.DATA_DIR which is derived from __dirname, NOT process.cwd()
+                const dbPath = path.join(CONFIG.PATHS.DATA_DIR, 'lancedb');
                 if (!fs.existsSync(dbPath)) {
                     fs.mkdirSync(dbPath, { recursive: true });
                 }

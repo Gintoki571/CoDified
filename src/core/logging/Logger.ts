@@ -9,8 +9,6 @@
  * 3. Configurable verbosity
  */
 
-import { ENV } from '../../config/env';
-
 export enum LogLevel {
     DEBUG = 0,
     INFO = 1,
@@ -20,7 +18,7 @@ export enum LogLevel {
 
 export class Logger {
     // Current log level (default to INFO in production, DEBUG in dev)
-    private static currentLevel: LogLevel = ENV.NODE_ENV === 'production' ? LogLevel.INFO : LogLevel.DEBUG;
+    private static currentLevel: LogLevel = process.env.NODE_ENV === 'production' ? LogLevel.INFO : LogLevel.DEBUG;
 
     /**
      * Regex to catch potential API keys (sk-...)

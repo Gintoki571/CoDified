@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { Mutex } from 'async-mutex';
 import { validateNodeName, escapeSqlString } from '../../core/validation';
 import { CONFIG } from '../../config/config';
+import { Logger } from '../../core/logging/Logger';
 
 // -------------------------------------------------------------------------
 // Types
@@ -120,7 +121,7 @@ export class LanceDbManager {
     public async rollbackTransaction(transactionId: string): Promise<boolean> {
         const transaction = this.pendingTransactions.get(transactionId);
         if (!transaction) {
-            console.warn(`Transaction ${transactionId} not found`);
+            Logger.warn('LanceDB', `Transaction ${transactionId} not found`);
             return false;
         }
 
@@ -133,7 +134,7 @@ export class LanceDbManager {
             transaction.status = 'rolled_back';
             return true;
         } catch (error) {
-            console.error(`Failed to rollback transaction ${transactionId}:`, error);
+            Logger.error('LanceDB', `Failed to rollback transaction ${transactionId}:`, error);
             return false;
         }
     }

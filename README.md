@@ -1,14 +1,21 @@
-# Thread (Embedded Edition)
+# CoDified (Hardened Memory Engine)
 
 A high-performance, local-first memory engine for AI Agents.
-It combines **Temporal**, **Semantic**, and **Graph** retrieval capabilities without requiring Docker.
+It combines **Temporal**, **Semantic**, and **Graph** retrieval capabilities with a hardened, production-ready architecture.
 
-##  Architecture (Embedded Stack)
+##  Core Architecture (Hardened Stack)
 - **Database**: SQLite (WAL Mode) with Drizzle ORM.
-- **Vector Store**: LanceDB (Embedded).
-- **Graph Engine**: Native SQLite Recursive CTEs.
-- **Cache**: In-Memory LRU (Session).
-- **Interface**: MCP (Model Context Protocol).
+- **Vector Store**: LanceDB (Embedded) with connection/table pooling.
+- **Graph Engine**: Native SQLite Recursive CTEs (Bidirectional).
+- **Intelligence**: Integrated Entity Extraction & Summarization.
+- **Security**: Zod-validated MCP layer, Secure Randomness (`crypto`), and Thread-safe Transactions (`async-mutex`).
+- **Extensibility**: Thread-safe Modular Plugin System (`ModuleManager`).
+
+##  Features
+- **Intelligence Ingestion**: Automatic extraction of entities and relations.
+- **Hybrid Search**: RAG-enhanced retrieval combining semantic vectors and graph context.
+- **Multi-Agent Ready**: Built-in schema support for multi-persona memory isolation.
+- **Fast Path I/O**: Asynchronous background indexing for AI-heavy tasks.
 
 ##  Getting Started
 
@@ -22,30 +29,26 @@ npm install
 ```
 
 ### 3. Database Setup
-Initialize the SQLite database and generate migrations:
 ```bash
 npx drizzle-kit generate
 ```
-*Note: The database is created automatically in `./data/remem.db` on first run.*
+The database is created in `./data/codified_v2.db`.
 
-### 4. Running the Server
-Start the MCP Server (Stdio Mode):
+### 4. Running the Server (MCP)
 ```bash
 npm start
 ```
-*Debug Mode:*
-```bash
-npm run dev
-```
+*Debug Mode:* `npm run dev`
 
 ##  Testing
-Run the System Integration Test to verify the full pipeline (Embedding -> Storage -> Retrieval):
+Run security and performance tests:
 ```bash
-npm test
+npm test # Standard integration
+npx tsx tests/security/audit_remediation.test.ts # Security hardening verification
 ```
 
 ##  Project Structure
-- `src/infrastructure/`: Database, Vector, and Cache implementations.
-- `src/core/`: Logic for Graph Traversal and Memory Orchestration.
-- `src/interface/mcp/`: MCP Tool definitions and Server entry point.
-- `drizzle/`: SQL Migrations.
+- `src/infrastructure/`: Database, Vector, and LLM implementations.
+- `src/core/`: Logic for Graph Traversal, Memory Orchestration, and Modules.
+- `src/interface/mcp/`: Validated MCP Tool definitions and Server.
+- `drizzle/`: SQL Migrations for schema evolution.

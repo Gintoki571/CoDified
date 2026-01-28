@@ -7,6 +7,7 @@ import {
 import { MemoryManager } from '../../core/memory/MemoryManager';
 import { RememError, ErrorFactory } from '../../core/errors';
 import { RateLimiter } from '../../core/security/RateLimiter';
+import { Logger } from '../../core/logging/Logger';
 import { z } from 'zod';
 
 // -------------------------------------------------------------------------
@@ -263,12 +264,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // Error handling
 server.onerror = (error: Error) => {
-    console.error("[MCP Server Error]", error);
+    Logger.error('MCP', "[MCP Server Error]", error);
 };
 
 // Graceful Shutdown
 const cleanup = async () => {
-    console.error('[CoDified] Shutting down gracefully...');
+    Logger.info('MCP', '[CoDified] Shutting down gracefully...');
     await server.close();
     process.exit(0);
 };
@@ -280,14 +281,14 @@ async function main() {
     try {
         const transport = new StdioServerTransport();
         await server.connect(transport);
-        console.error("CoDified MCP Server running on stdio");
+        Logger.info('MCP', "CoDified MCP Server running on stdio");
     } catch (error) {
-        console.error("Fatal Server Error:", error);
+        Logger.error('MCP', "Fatal Server Error:", error);
         process.exit(1);
     }
 }
 
 main().catch((error) => {
-    console.error("Fatal error in main():", error);
+    Logger.error('MCP', "Fatal error in main():", error);
     process.exit(1);
 });

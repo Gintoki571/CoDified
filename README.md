@@ -67,7 +67,6 @@ Want to use Gemini to write a story but Claude to edit it? Go for it. You don't 
 
 ## 🚀 Getting Started
 
-Honest warning: this is a local-first tool. No cloud, no subscriptions, but you do need to run it on your own computer.
 
 ### Prerequisites
 *   Node.js v18+ (A common software for running apps)

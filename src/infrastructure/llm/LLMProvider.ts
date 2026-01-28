@@ -1,4 +1,5 @@
 import { ENV } from '../../config/env';
+import { Logger } from '../../core/logging/Logger';
 
 /**
  * Lightweight Provider for LLM Chat Completions.
@@ -90,7 +91,7 @@ export class LLMProvider {
 
             return content;
         } catch (error) {
-            console.error('LLM completion failed:', error);
+            Logger.error('LLMProvider', 'LLM completion failed:', error);
             throw error;
         }
     }

@@ -12,6 +12,7 @@ import { CircuitBreaker } from '../security/CircuitBreaker';
 import { EntityExtractor, ExtractedData } from '../processing/EntityExtractor';
 import { Summarizer } from '../processing/Summarizer';
 import { ModuleManager } from '../modules/ModuleManager';
+import { Logger } from '../logging/Logger';
 
 export class MemoryManager {
     private embedder: Embedder;
@@ -55,7 +56,8 @@ export class MemoryManager {
             type: 'memory',
             content: content,
             userId: userId,
-            embeddingId: vectorId, // Placeholder for later search expansion
+            embeddingId: vectorId,
+            status: 'PENDING',
             createdAt: new Date(timestamp),
             updatedAt: new Date(timestamp)
         });
@@ -63,7 +65,7 @@ export class MemoryManager {
         // 2. Trigger Background AI Processing (Slow path)
         // Note: We don't 'await' this here to keep the latency low.
         this.processInBackground(content, userId, vectorId, memNodeName, metadata).catch(err => {
-            console.error(`[Background-AI] Failed to process memory ${memNodeName}:`, err);
+            Logger.error('MemoryManager', `Failed to process memory ${memNodeName}:`, err);
         });
 
         // 3. Log Event (Sync)
@@ -90,63 +92,81 @@ export class MemoryManager {
         memNodeName: string,
         metadata: any
     ): Promise<void> {
-        console.info(`[Background-AI] Starting processing for ${memNodeName}...`);
-
-        // A. Generate Embedding
-        const vector = await this.embeddingCircuit.execute(async () =>
-            await this.embedder.embed(content)
-        );
-
-        // B. Save to Vector Store
-        await this.vectorCircuit.execute(async () =>
-            await this.vectorDb.addVectors([{
-                id: vectorId,
-                vector: vector,
-                text: content,
-                userid: userId,
-                timestamp: Date.now(),
-                nodeName: memNodeName,
-                metadata: JSON.stringify(metadata)
-            }])
-        );
-
-        // C. Extract Entities
-        let extractedData: ExtractedData = { entities: [], relationships: [] };
+        Logger.info('Background-AI', `Starting processing for ${memNodeName}...`);
         try {
-            extractedData = await this.extractionCircuit.execute(async () =>
-                await this.extractor.extract(content)
+
+            // A. Generate Embedding
+            const vector = await this.embeddingCircuit.execute(async () =>
+                await this.embedder.embed(content)
             );
+
+            // B. Save to Vector Store
+            await this.vectorCircuit.execute(async () =>
+                await this.vectorDb.addVectors([{
+                    id: vectorId,
+                    vector: vector,
+                    text: content,
+                    userid: userId,
+                    timestamp: Date.now(),
+                    nodeName: memNodeName,
+                    metadata: JSON.stringify(metadata)
+                }])
+            );
+
+            // C. Extract Entities
+            let extractedData: ExtractedData = { entities: [], relationships: [] };
+            try {
+                extractedData = await this.extractionCircuit.execute(async () =>
+                    await this.extractor.extract(content)
+                );
+            } catch (err) {
+                Logger.error('Background-AI', `Extraction failed for ${memNodeName}:`, err);
+            }
+
+            // D. Populate Graph (SQLite) 
+            // We use a separate transaction for this part
+            await this.txManager.executeTransaction(async () => {
+                const mainNodeResult = await getDatabase().select().from(nodes).where(
+                    and(eq(nodes.name, memNodeName), eq(nodes.userId, userId))
+                ).limit(1);
+
+                if (mainNodeResult.length === 0) return;
+                const mainNodeId = mainNodeResult[0].id;
+
+                const nodeMap = new Map<string, number>();
+                nodeMap.set(memNodeName, mainNodeId);
+
+                for (const entity of extractedData.entities) {
+                    const eid = await this.getOrCreateNode(entity.name, entity.type, userId, entity.metadata);
+                    nodeMap.set(entity.name, eid);
+                    await this.createEdge(mainNodeId, eid, 'mentions', userId);
+                }
+
+                for (const rel of extractedData.relationships) {
+                    const fromId = nodeMap.get(rel.from) || await this.getOrCreateNode(rel.from, 'concept', userId);
+                    const toId = nodeMap.get(rel.to) || await this.getOrCreateNode(rel.to, 'concept', userId);
+                    await this.createEdge(fromId, toId, rel.type, userId);
+                }
+
+                // 4. Mark node as READY
+                await getDatabase().update(nodes)
+                    .set({ status: 'READY', updatedAt: new Date() })
+                    .where(eq(nodes.embeddingId, vectorId));
+            }, userId);
+
         } catch (err) {
-            console.error(`[Background-AI] Extraction failed for ${memNodeName}:`, err);
+            console.error(`[Background-AI] Failed to process memory ${memNodeName}:`, err);
+            // Mark as FAILED for retry worker
+            try {
+                await getDatabase().update(nodes)
+                    .set({ status: 'FAILED', updatedAt: new Date() })
+                    .where(eq(nodes.embeddingId, vectorId));
+            } catch (updateErr) {
+                Logger.error('Background-AI', `Failed to update status to FAILED for ${memNodeName}:`, updateErr);
+            }
         }
 
-        // D. Populate Graph (SQLite) 
-        // We use a separate transaction for this part
-        await this.txManager.executeTransaction(async () => {
-            const mainNodeResult = await getDatabase().select().from(nodes).where(
-                and(eq(nodes.name, memNodeName), eq(nodes.userId, userId))
-            ).limit(1);
-
-            if (mainNodeResult.length === 0) return;
-            const mainNodeId = mainNodeResult[0].id;
-
-            const nodeMap = new Map<string, number>();
-            nodeMap.set(memNodeName, mainNodeId);
-
-            for (const entity of extractedData.entities) {
-                const eid = await this.getOrCreateNode(entity.name, entity.type, userId, entity.metadata);
-                nodeMap.set(entity.name, eid);
-                await this.createEdge(mainNodeId, eid, 'mentions', userId);
-            }
-
-            for (const rel of extractedData.relationships) {
-                const fromId = nodeMap.get(rel.from) || await this.getOrCreateNode(rel.from, 'concept', userId);
-                const toId = nodeMap.get(rel.to) || await this.getOrCreateNode(rel.to, 'concept', userId);
-                await this.createEdge(fromId, toId, rel.type, userId);
-            }
-        });
-
-        console.info(`[Background-AI] Completed processing for ${memNodeName}.`);
+        Logger.info('Background-AI', `Completed processing for ${memNodeName}.`);
     }
 
     /**

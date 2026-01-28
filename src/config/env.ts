@@ -2,9 +2,10 @@
 
 import { z } from 'zod';
 import dotenv from 'dotenv';
+import path from 'path';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from project root, not process.cwd()
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 /**
  * Environment Variable Schema

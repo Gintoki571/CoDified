@@ -46,7 +46,7 @@ const _env = envSchema.parse(process.env);
 // Custom validation logic for dependencies
 if (!_env.OPENAI_BASE_URL && (!_env.OPENAI_API_KEY || _env.OPENAI_API_KEY === 'lm-studio')) {
     if (_env.NODE_ENV !== 'test') {
-        console.warn('⚠️  WARNING: No OPENAI_BASE_URL provided, defaulting to OpenAI API, but OPENAI_API_KEY is missing or invalid.');
+        process.stderr.write('⚠️  WARNING: No OPENAI_BASE_URL provided, defaulting to OpenAI API, but OPENAI_API_KEY is missing or invalid.\n');
     }
 }
 

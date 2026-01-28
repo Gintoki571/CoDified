@@ -12,7 +12,7 @@ export interface VectorRecord {
     id: string;
     vector: number[];
     text: string;
-    userId: string;
+    userid: string;
     timestamp: number;
     metadata: string; // JSON string
     [key: string]: unknown; // Index signature for LanceDB compatibility
@@ -37,6 +37,9 @@ export class LanceDbManager {
     private db: lancedb.Connection | null = null;
     private tableName = 'memories';
     private initMutex = new Mutex();
+
+    // Caching for performance
+    private tableCache: Map<string, lancedb.Table> = new Map();
 
     // In-memory transaction tracker for Saga pattern
     private pendingTransactions: Map<string, SagaTransaction> = new Map();
@@ -65,11 +68,17 @@ export class LanceDbManager {
     }
 
     private async getTable(): Promise<lancedb.Table | null> {
+        if (this.tableCache.has(this.tableName)) {
+            return this.tableCache.get(this.tableName)!;
+        }
+
         const db = await this.getDb();
         const existingTableNames = await db.tableNames();
 
         if (existingTableNames.includes(this.tableName)) {
-            return await db.openTable(this.tableName);
+            const table = await db.openTable(this.tableName);
+            this.tableCache.set(this.tableName, table);
+            return table;
         }
         return null;
     }
@@ -140,14 +149,14 @@ export class LanceDbManager {
             if (record.nodeName) validateNodeName(record.nodeName as string);
         }
 
-        const db = await this.getDb();
-        const existingTableNames = await db.tableNames();
+        const table = await this.getTable();
 
-        if (existingTableNames.includes(this.tableName)) {
-            const table = await db.openTable(this.tableName);
+        if (table) {
             await table.add(records);
         } else {
-            await db.createTable(this.tableName, records);
+            const db = await this.getDb();
+            const newTable = await db.createTable(this.tableName, records);
+            this.tableCache.set(this.tableName, newTable);
         }
     }
 
@@ -192,7 +201,7 @@ export class LanceDbManager {
 
         // Build filter conditions with escaping
         const safeUserId = escapeSqlString(userId);
-        const conditions: string[] = [`userId = '${safeUserId}'`];
+        const conditions: string[] = [`userid = '${safeUserId}'`];
 
         if (minTimestamp !== undefined) {
             conditions.push(`timestamp >= ${minTimestamp}`);

@@ -44,6 +44,7 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
             content TEXT,
             user_id TEXT NOT NULL,
             embedding_id TEXT,
+            metadata TEXT,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
             updated_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
@@ -55,6 +56,7 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
             type TEXT NOT NULL DEFAULT 'RELATED_TO',
             weight REAL DEFAULT 1.0,
             user_id TEXT NOT NULL,
+            metadata TEXT,
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
         );
         
@@ -82,6 +84,16 @@ export function initDatabase(dbPath: string = DB_PATH): BetterSQLite3Database<ty
             token_count INTEGER,
             is_summarized INTEGER DEFAULT 0,
             created_at INTEGER NOT NULL DEFAULT (unixepoch())
+        );
+
+        CREATE TABLE IF NOT EXISTS agents (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            capabilities TEXT,
+            user_id TEXT,
+            created_at INTEGER DEFAULT (unixepoch()),
+            last_seen INTEGER DEFAULT (unixepoch())
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS uid_nodes_name_user ON nodes(name, user_id);

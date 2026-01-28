@@ -8,6 +8,20 @@
       "when": 1769494660088,
       "tag": "0000_pale_wiccan",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1769593945202,
+      "tag": "0001_fantastic_moon_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1769595514227,
+      "tag": "0002_slippery_sabra",
+      "breakpoints": true
     }
   ]
 }

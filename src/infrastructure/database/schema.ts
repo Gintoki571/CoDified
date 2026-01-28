@@ -11,6 +11,7 @@ export const nodes = sqliteTable('nodes', {
     content: text('content'),               // Raw text content
     userId: text('user_id').notNull(),      // Multi-tenant isolation
     embeddingId: text('embedding_id'),      // Link to LanceDB (optional)
+    metadata: text('metadata', { mode: 'json' }), // Flexible metadata
     createdAt: integer('created_at', { mode: 'timestamp' })
         .notNull()
         .default(sql`(unixepoch())`),
@@ -41,6 +42,7 @@ export const edges = sqliteTable('edges', {
     type: text('type').notNull().default('RELATED_TO'),
     weight: real('weight').default(1.0),
     userId: text('user_id').notNull(),
+    metadata: text('metadata', { mode: 'json' }), // Relationship metadata
     createdAt: integer('created_at', { mode: 'timestamp' })
         .notNull()
         .default(sql`(unixepoch())`),
@@ -95,3 +97,18 @@ export const messages = sqliteTable('messages', {
     summarizedIndex: index('idx_messages_summarized').on(t.isSummarized),
     createdIndex: index('idx_messages_created').on(t.createdAt),
 }));
+
+// -------------------------------------------------------------------------
+// 6. Agents Table (Persona / Scope Management)
+// -------------------------------------------------------------------------
+export const agents = sqliteTable('agents', {
+    id: text('id').primaryKey(), // e.g., 'coding-assistant'
+    name: text('name').notNull(),
+    type: text('type').notNull(),
+    capabilities: text('capabilities', { mode: 'json' }),
+    userId: text('user_id'), // Nullable if system-wide
+    createdAt: integer('created_at', { mode: 'timestamp' })
+        .default(sql`(unixepoch())`),
+    lastSeen: integer('last_seen', { mode: 'timestamp' })
+        .default(sql`(unixepoch())`),
+});

@@ -18,6 +18,7 @@ export const nodes = sqliteTable('nodes', {
     updatedAt: integer('updated_at', { mode: 'timestamp' })
         .notNull()
         .default(sql`(unixepoch())`),
+    status: text('status').default('PENDING'), // PENDING, READY, FAILED
 }, (t) => ({
     // Strict Composite Unique: A user cannot have two nodes with the same name
     uniqueNameUser: uniqueIndex('uid_nodes_name_user').on(t.name, t.userId),
